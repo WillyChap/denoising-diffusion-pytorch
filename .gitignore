@@ -130,3 +130,21 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# Ignore the "node_modules" folder at any level
+results/
+
+# Ignore the "build" folder in the root directory
+jpg/
+GIF/
+
+# Ignore the "logs" folder anywhere in the project
+logs/
+
+# Ignore the "temp" folder but not "temp/keep"
+temp/
+!temp/keep/
+
+# Ignore all ".env" files across the project
+*.env
