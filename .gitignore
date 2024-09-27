@@ -148,3 +148,4 @@ temp/
 
 # Ignore all ".env" files across the project
 *.env
+wandb/
