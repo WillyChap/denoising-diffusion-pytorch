@@ -97,7 +97,7 @@ def main():
         max_grad_norm = 1.0,
         save_and_sample_every = 1000
     )
-
+    trainer.load('21','funded_sweden')
 
     trainer.train()
 

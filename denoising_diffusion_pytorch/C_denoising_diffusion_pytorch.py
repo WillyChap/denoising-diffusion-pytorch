@@ -204,11 +204,6 @@ class ResnetBlock(Module):
 
         return h + self.res_conv(x)
 
-
-# Upsample block with periodic padding for final layer
-def Final_Upsample_Per(dim_out, dim_in):
-    return PeriodicConv2d(dim_out, dim_in, kernel_size=3, padding_size=1)
-
 class LinearAttention(Module):
     def __init__(
         self,
@@ -944,6 +939,33 @@ class DataProcessed(Dataset):
     
         return ds
 
+    def _unapply_scaling(self, ds):
+        if self.config['scaling'] == 'std':
+            # Reverse the min-max scaling for 'PS', 'PRECT', and 'TREFHT'
+            vars = ['PS', 'PRECT', 'TREFHT']
+            
+            for vv in vars:
+                mini = self.loaded_min_max_dict[f'{vv}_min']
+                maxi = self.loaded_min_max_dict[f'{vv}_max']
+                
+                if maxi > 10:
+                    maxi = 10
+                if mini < -10:
+                    mini = -10
+                
+                # Reverse the min-max scaling
+                ds[vv][:,:,:] = ds[vv][:,:,:] * (maxi - mini) + mini
+    
+            # Reverse the standardization (z-score normalization) for 'PS', 'PRECT', and 'TREFHT'
+            ds['PS'][:,:,:] = ds['PS'][:,:,:] * self.loaded_mean_std_dict['PS_std'] + self.loaded_mean_std_dict['PS_mean']
+            ds['PRECT'][:,:,:] = ds['PRECT'][:,:,:] * self.loaded_mean_std_dict['PRECT_std'] + self.loaded_mean_std_dict['PRECT_mean']
+            ds['TREFHT'][:,:,:] = ds['TREFHT'][:,:,:] * self.loaded_mean_std_dict['TREFHT_std'] + self.loaded_mean_std_dict['TREFHT_mean']
+    
+        else:
+            raise ValueError("Invalid scaling method specified.")
+    
+        return ds
+
     def _augment_data(self, data):
         # Apply rotations for augmentation
         data_rot90 = np.rot90(data, k=1, axes=(1, 2))
@@ -995,6 +1017,7 @@ class Trainer_CESM:
         folder,
         config,
         run_name,
+        do_wandb, 
         *,
         train_batch_size = 16,
         gradient_accumulate_every = 1,
@@ -1021,15 +1044,21 @@ class Trainer_CESM:
 
         # accelerator
 
-        self.accelerator = Accelerator(
-            split_batches = split_batches,
-            mixed_precision = mixed_precision_type if amp else 'no',
-            log_with = "wandb"
-        )
-
+        if do_wandb:
+            self.accelerator = Accelerator(
+                split_batches = split_batches,
+                mixed_precision = mixed_precision_type if amp else 'no',
+                log_with = "wandb"
+            )
+        else:
+            self.accelerator = Accelerator(
+                split_batches = split_batches,
+                mixed_precision = mixed_precision_type if amp else 'no'
+            )
         
         # model
         self.run_name = run_name
+        self.do_wandb = do_wandb
         self.model = diffusion_model
         self.channels = diffusion_model.channels
         is_ddim_sampling = diffusion_model.is_ddim_sampling
@@ -1072,23 +1101,15 @@ class Trainer_CESM:
         assert len(self.ds) >= 100, 'you should have at least 100 images in your folder. at least 10k images recommended'
 
         print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
-        print('cpu count:', cpu_count())
+
 
 
         # Check if PBS_NP is set, otherwise fallback to cpu_count()
         # num_cpus = int(os.getenv('PBS_NP', cpu_count()))
 
         num_cpus = get_num_cpus()
-        print(f"Number of CPUs assigned: {num_cpus}")
-        print(f"Number of CPUs assigned: {num_cpus}")
 
-        dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = False, pin_memory = True, num_workers = cpu_count())
+        dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = False, pin_memory = True, num_workers = 64)
 
         dl = self.accelerator.prepare(dl)
         self.dl = cycle(dl)
@@ -1190,23 +1211,25 @@ class Trainer_CESM:
         
         self.config["num_params"]=sum(pttt.numel() for pttt in self.model.parameters() if pttt.requires_grad)
         # Initialize tracker via accelerator
-        self.accelerator.init_trackers(project_name="CESM_PS_PRECT_T2m", config=self.config,
-                                       init_kwargs={"wandb":{"name":self.run_name}} )
 
-        # Add a delay to allow the tracker to initialize properly
-        print("Waiting for 10 seconds to ensure tracker is initialized...")
-        time.sleep(10)
+        if self.do_wandb:
+            self.accelerator.init_trackers(project_name="CESM_PS_PRECT_T2m", config=self.config,
+                                           init_kwargs={"wandb":{"name":self.run_name}} )
+    
+            # Add a delay to allow the tracker to initialize properly
+            print("Waiting for 10 seconds to ensure tracker is initialized...")
+            time.sleep(10)
 
-        # Fetch the tracker and check if the run is associated
-        wandb_tracker = self.accelerator.get_tracker("wandb")
-
-        # Ensure tracker has a run object
-        if hasattr(wandb_tracker, 'run') and wandb_tracker.run:
-            wandb_run = wandb_tracker.run
-            run_name = wandb_run.name if wandb_run.name else "Unnamed run"
-            print(f"Run Name: {run_name}")
-        else:
-            print("Error: The tracker does not have a Wandb run associated.")
+            # Fetch the tracker and check if the run is associated
+            wandb_tracker = self.accelerator.get_tracker("wandb")
+    
+            # Ensure tracker has a run object
+            if hasattr(wandb_tracker, 'run') and wandb_tracker.run:
+                wandb_run = wandb_tracker.run
+                run_name = wandb_run.name if wandb_run.name else "Unnamed run"
+                print(f"Run Name: {run_name}")
+            else:
+                print("Error: The tracker does not have a Wandb run associated.")
 
         # Store the run name
 
@@ -1244,7 +1267,8 @@ class Trainer_CESM:
                 pbar.set_description(f'loss: {total_loss:.4f}')
 
                 if (self.step%10) == 0:
-                    self.accelerator.log({'total_loss': total_loss}, step=self.step)
+                    if self.do_wandb:
+                        self.accelerator.log({'total_loss': total_loss}, step=self.step)
 
                 accelerator.wait_for_everyone()
                 accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
@@ -1280,7 +1304,9 @@ class Trainer_CESM:
                                     cmap='RdBu', vmin=0, vmax=1)
                             plt.colorbar()
                         plt.tight_layout()
-                        self.accelerator.log({"Samples":wandb.Image(samples_fig)})
+
+                        if self.do_wandb:
+                            self.accelerator.log({"Samples":wandb.Image(samples_fig)})
 
                         samples_fig=plt.figure(figsize=(18, 9))
                         plt.suptitle("Conditions after %d epochs" % self.step)
@@ -1291,7 +1317,8 @@ class Trainer_CESM:
                                     cmap='RdBu', vmin=0, vmax=1)
                             plt.colorbar()
                         plt.tight_layout()
-                        self.accelerator.log({"Condition":wandb.Image(samples_fig)})
+                        if self.do_wandb:
+                            self.accelerator.log({"Condition":wandb.Image(samples_fig)})
                         plt.close()
 
                         # whether to calculate fid

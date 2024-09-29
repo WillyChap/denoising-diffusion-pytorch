@@ -15,4 +15,16 @@
 #accelerate config
 module load conda
 conda activate LuRain
-accelerate launch Train_CESM_Conditioned_Continue.py
+
+accelerate launch Gen_Data.py --month 1
+accelerate launch Gen_Data.py --month 2
+accelerate launch Gen_Data.py --month 3
+accelerate launch Gen_Data.py --month 4
+accelerate launch Gen_Data.py --month 5
+accelerate launch Gen_Data.py --month 6
+accelerate launch Gen_Data.py --month 7
+accelerate launch Gen_Data.py --month 8
+accelerate launch Gen_Data.py --month 9
+accelerate launch Gen_Data.py --month 10
+accelerate launch Gen_Data.py --month 11
+accelerate launch Gen_Data.py --month 12
