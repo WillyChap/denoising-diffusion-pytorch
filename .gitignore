@@ -156,3 +156,6 @@ wandb/
 *.nc
 
 *.npy
+
+*.pt
+

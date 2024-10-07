@@ -932,7 +932,11 @@ class DataProcessed(Dataset):
                 
                 ds[vv][:,:,:] =  (ds[vv][:,:,:] - mini) / (maxi - mini)
 
-            ds['CLIM_T2M'][:,:,:] = (ds['CLIM_T2M'][:,:,:] - 211.45393372)/(313.99099731-211.45393372)
+            ds['month_expanded']=ds['month_expanded'].copy()
+            ds['co2vmr_expanded']=ds['co2vmr_expanded'].copy()
+
+            ds['month_expanded_scaled'] = (ds['month_expanded'][:,:,:] - 1)/(12-1)
+            ds['co2vmr_expanded_scaled'] = (ds['co2vmr_expanded'][:,:,:] - 0.00039895)/(0.0008223-0.00039895)
             
         else:
             raise ValueError("Invalid scaling method specified.")
@@ -981,10 +985,30 @@ class DataProcessed(Dataset):
         Lazy load the data from file and preprocess it.
         """
         with xr.open_dataset(file_path) as ds:
+
+            # Get the shape of the other variables (time, lat, lon)
+            lat = ds['PS'].coords['lat']
+            lon = ds['PS'].coords['lon']
+            
+            # Broadcast co2vmr across (time, lat, lon)
+            co2vmr_broadcasted = ds['co2vmr'].broadcast_like(ds['PS'])
+            
+            # Alternatively, you can expand the dimensions manually
+            co2vmr_expanded = ds['co2vmr'].expand_dims({'lat': lat, 'lon': lon}, axis=(1, 2))
+            
+            # Assign this expanded co2vmr back to the dataset with the correct dimensions
+            ds['co2vmr_expanded'] = co2vmr_expanded
+            
+            ds['time.month'].broadcast_like(ds['PS'])
+            # Alternatively, you can expand the dimensions manually
+            month_expanded = ds['time.month'].expand_dims({'lat': lat, 'lon': lon}, axis=(1, 2))
+            month_expanded = month_expanded-1
+            month_corrected = month_expanded.where(month_expanded != 0, 12)
+            ds['month_expanded'] = month_corrected
     
             ds = self._apply_scaling(ds)
             data = np.swapaxes(ds[['PS','PRECT','TREFHT']].to_array().values,0,1)  # Replace 'forecast' with the relevant key in your dataset
-            cond = np.expand_dims(ds['CLIM_T2M'].values,1)  # Replace 'forecast' with the relevant key in your dataset
+            cond = np.swapaxes(ds[['month_expanded_scaled','co2vmr_expanded_scaled']].to_array().values,0,1)  # Replace 'forecast' with the relevant key in your dataset
     
             # Apply augmentation if necessary
             if self.augmentation:
@@ -1090,10 +1114,10 @@ class Trainer_CESM:
         
 
         FPs = sorted(glob.glob(f'/{folder}/*.nc'))
-        with open('scaling_dict.pkl', 'rb') as file:
+        with open('scaling_dict_CC.pkl', 'rb') as file:
             loaded_mean_std_dict = pickle.load(file)
         
-        with open('scaling_dict_minmax.pkl', 'rb') as file:
+        with open('scaling_dict_minmax_CC.pkl', 'rb') as file:
             loaded_min_max_dict = pickle.load(file)
         
         self.ds = DataProcessed(FPs, config, loaded_mean_std_dict, loaded_min_max_dict)
@@ -1233,9 +1257,8 @@ class Trainer_CESM:
 
         # Store the run name
 
-        x_cond_rand = torch.zeros(60,1,192,288)
         dada, x_c = self.ds.__getitem__(0)
-        x_cond_rand = torch.zeros(60, 1, x_c.shape[1], x_c.shape[2], device=device)
+        x_cond_rand = torch.zeros(60, self.config["context_channels"], x_c.shape[1], x_c.shape[2], device=device)
         num_gpus = accelerator.num_processes
         
         with tqdm(initial = self.step, total = self.train_num_steps, disable = not accelerator.is_main_process) as pbar:
@@ -1255,7 +1278,7 @@ class Trainer_CESM:
                     if go_in < 30:
                         idx_rand1 = torch.randint(0, 59, (1,)).item()  # Index for x_cond_rand
                         idx_rand2 = torch.randint(0, int(self.batch_size/num_gpus), (1,)).item()  # Index for x_cond
-                        x_cond_rand[idx_rand1, 0, :, :] = x_cond[idx_rand2, 0, :, :].clone()  # Clone to avoid issues with inference mode
+                        x_cond_rand[idx_rand1, :, :, :] = x_cond[idx_rand2, :, :, :].clone()  # Clone to avoid issues with inference mode
 
                     with self.accelerator.autocast():
                         loss = self.model(data, x_cond)

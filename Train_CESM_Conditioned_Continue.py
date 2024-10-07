@@ -10,7 +10,7 @@ def get_config():
         "input_channels": 1,
         "output_channels": 1,
         "context_image": True,
-        "context_channels": 1,
+        "context_channels": 2,
         "num_blocks": [2, 2],
         "hidden_channels": 64,
         "hidden_context_channels": 8,
@@ -48,13 +48,13 @@ def main():
     model = Unet(
         channels = 3,
         dim = config['hidden_channels'],
-        conditional_dimensions=1,
+        conditional_dimensions=config['context_channels'],
         dim_mults = config['dim_mults'],
         flash_attn = config['flash_attn'],
         dropout = config['dropout'],
         condition = True
     )
-
+    
     diffusion = GaussianDiffusion(
         model,
         image_size = (192, 288),
@@ -84,10 +84,11 @@ def main():
     print('model params:', sum(p.numel() for p in model.parameters() if p.requires_grad))
     trainer = Trainer_CESM(
         diffusion,
-        '/glade/derecho/scratch/wchapman/CESM_LE2_vars_with_climo/',
+        '/glade/derecho/scratch/wchapman/CESM_LE2_vars_BSSP370cmip6/',
         config,
         run_name,
         train_batch_size = config["batch_size"],
+        results_folder = './results_cc/',
         train_lr = 5e-5,
         train_num_steps = 700000,         # total training steps
         gradient_accumulate_every = 2,    # gradient accumulation steps
@@ -95,9 +96,10 @@ def main():
         amp = True,                       # turn on mixed precision
         calculate_fid = False,           # whether to calculate fid during training
         max_grad_norm = 1.0,
-        save_and_sample_every = 1000
+        save_and_sample_every = 1000,
+        do_wandb = True,
     )
-    trainer.load('21','funded_sweden')
+    trainer.load('4','thumb_really')
 
     trainer.train()
 
