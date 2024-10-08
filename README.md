@@ -1,4 +1,4 @@
-<img src="./images/cesm-diffusion.png" width="500px"></img>
+<img src="./images/cesm-diffusion_02.png" width="500px"></img>
 
 ## Conditional Denoising Diffusion Model for Climate Prediction, in Pytorch
 
