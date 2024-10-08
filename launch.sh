@@ -15,4 +15,4 @@
 #accelerate config
 module load conda
 conda activate LuRain
-accelerate launch Train_CESM_Conditioned_Continue.py
+accelerate launch Train_CESM_Conditioned.py

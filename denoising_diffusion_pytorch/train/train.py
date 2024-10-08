@@ -17,7 +17,9 @@ from ema_pytorch import EMA
 from accelerate import Accelerator
 from denoising_diffusion_pytorch.utils import *
 from denoising_diffusion_pytorch.datasets import DataProcessed
+from denoising_diffusion_pytorch.attend import Attend
 
+from denoising_diffusion_pytorch.version import __version__
 # trainer class
 class Trainer_CESM:
     def __init__(
