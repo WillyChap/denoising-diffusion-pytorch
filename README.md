@@ -1,91 +1,90 @@
-<img src="./images/denoising-diffusion.png" width="500px"></img>
+<img src="./images/cesm-diffusion.png" width="500px"></img>
 
-## Denoising Diffusion Probabilistic Model, in Pytorch
+## Conditional Denoising Diffusion Model for Climate Prediction, in Pytorch
 
-Implementation of <a href="https://arxiv.org/abs/2006.11239">Denoising Diffusion Probabilistic Model</a> in Pytorch. It is a new approach to generative modeling that may <a href="https://ajolicoeur.wordpress.com/the-new-contender-to-gans-score-matching-with-langevin-sampling/">have the potential</a> to rival GANs. It uses denoising score matching to estimate the gradient of the data distribution, followed by Langevin sampling to sample from the true distribution.
+This fork adapts the [Denoising Diffusion Probabilistic Model](https://arxiv.org/abs/2006.11239) for climate predictions using the CESM2 Large Ensemble (LENS) data. It predicts T2m, Precipitation, and Surface Pressure, conditioned on a given month and CO2 concentration (CO2vmr). This enables climate model forecasts with diffusion-based predictions, improving upon existing methodologies for ensemble predictions.
 
-This implementation was inspired by the official Tensorflow version <a href="https://github.com/hojonathanho/diffusion">here</a>
+### Features
+- **Conditional**: The model takes CO2vmr and month as inputs.
+- **Training scripts for NCAR HPC**: New launch and training scripts tailored for the NCAR High Performance Computing environment.
+- **File Structure**: The file tree has been significantly restructured to accommodate the new scripts and features.
 
-Youtube AI Educators - <a href="https://www.youtube.com/watch?v=W-O7AZNzbzQ">Yannic Kilcher</a> | <a href="https://www.youtube.com/watch?v=344w5h24-h8">AI Coffeebreak with Letitia</a> | <a href="https://www.youtube.com/watch?v=HoKDTa5jHvg">Outlier</a>
+For more information about the CESM2 Large Ensemble, visit the [CESM2 LENS page](https://www.cesm.ucar.edu/community-projects/lens2).
 
-<a href="https://github.com/yiyixuxu/denoising-diffusion-flax">Flax implementation</a> from <a href="https://github.com/yiyixuxu">YiYi Xu</a>
+---
 
-<a href="https://huggingface.co/blog/annotated-diffusion">Annotated code</a> by Research Scientists / Engineers from <a href="https://huggingface.co/">🤗 Huggingface</a>
-
-Update: Turns out none of the technicalities really matters at all | <a href="https://arxiv.org/abs/2208.09392">"Cold Diffusion" paper</a> | <a href="https://muse-model.github.io/">Muse</a>
-
-<img src="./images/sample.png" width="500px"><img>
-
-[![PyPI version](https://badge.fury.io/py/denoising-diffusion-pytorch.svg)](https://badge.fury.io/py/denoising-diffusion-pytorch)
-
-## Install
+### Install
 
 ```bash
-$ pip install denoising_diffusion_pytorch
+$ pip install .
 ```
 
 ## Usage
 
 ```python
-import torch
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion
-
 model = Unet(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8),
-    flash_attn = True
-)
-
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 128,
-    timesteps = 1000    # number of steps
-)
-
-training_images = torch.rand(8, 3, 128, 128) # images are normalized from 0 to 1
-loss = diffusion(training_images)
-loss.backward()
-
-# after a lot of training
-
-sampled_images = diffusion.sample(batch_size = 4)
-sampled_images.shape # (4, 3, 128, 128)
+        channels = 3,
+        dim = config['hidden_channels'],
+        conditional_dimensions=config['context_channels'],
+        dim_mults = config['dim_mults'],
+        flash_attn = config['flash_attn'],
+        dropout = config['dropout'],
+        condition = True
+    )
+    
+    diffusion = GaussianDiffusion(
+        model,
+        image_size = (192, 288),
+        timesteps = config["timesteps"],    # number of steps
+        auto_normalize = True,
+        objective = "pred_v",
+     )
+    
+    
+    word_site = "https://www.mit.edu/~ecprice/wordlist.10000"
+    response = requests.get(word_site)
+    WORDS = response.content.splitlines()
+    
+    # Generate random indices
+    rn1 = randint(0, len(WORDS) - 1)
+    rn2 = randint(0, len(WORDS) - 1)
+    
+    # Decode the byte lines to strings
+    w1 = WORDS[rn1].decode('utf-8')
+    w2 = WORDS[rn2].decode('utf-8')
+    
+    run_name = f'{w1}_{w2}'
+    
+    print(f'my name is {run_name}')
+    
+    diffusion.is_ddim_sampling = True
+    print('model params:', sum(p.numel() for p in model.parameters() if p.requires_grad))
+    trainer = Trainer_CESM(
+        diffusion,
+        '/glade/derecho/scratch/wchapman/CESM_LE2_vars_BSSP370cmip6/',
+        config,
+        run_name,
+        train_batch_size = config["batch_size"],
+        results_folder = './results_cc/',
+        train_lr = 5e-5,
+        train_num_steps = 700000,         # total training steps
+        gradient_accumulate_every = 2,    # gradient accumulation steps
+        ema_decay = 0.995,                # exponential moving average decay
+        amp = True,                       # turn on mixed precision
+        calculate_fid = False,           # whether to calculate fid during training
+        max_grad_norm = 1.0,
+        save_and_sample_every = 1000,
+        do_wandb = True,
+    )
+    
+    trainer.train()
+    # after a lot of training
+    
+    sampled_images = diffusion.sample(batch_size = 4)
+    sampled_images.shape # (4, 3, 128, 128)
 ```
 
-Or, if you simply want to pass in a folder name and the desired image dimensions, you can use the `Trainer` class to easily train a model.
-
-```python
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer
-
-model = Unet(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8),
-    flash_attn = True
-)
-
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 128,
-    timesteps = 1000,           # number of steps
-    sampling_timesteps = 250    # number of sampling timesteps (using ddim for faster inference [see citation for ddim paper])
-)
-
-trainer = Trainer(
-    diffusion,
-    'path/to/your/images',
-    train_batch_size = 32,
-    train_lr = 8e-5,
-    train_num_steps = 700000,         # total training steps
-    gradient_accumulate_every = 2,    # gradient accumulation steps
-    ema_decay = 0.995,                # exponential moving average decay
-    amp = True,                       # turn on mixed precision
-    calculate_fid = True              # whether to calculate fid during training
-)
-
-trainer.train()
-```
-
-Samples and model checkpoints will be logged to `./results` periodically
+Samples and model checkpoints will be logged to `./results_folder` periodically
 
 ## Multi-GPU Training
 
