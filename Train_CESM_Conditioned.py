@@ -1,8 +1,11 @@
-from denoising_diffusion_pytorch.C_denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer_CESM
+# from denoising_diffusion_pytorch.C_denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer_CESM
+from denoising_diffusion_pytorch.train import Trainer_CESM
+from denoising_diffusion_pytorch.diffusion import GaussianDiffusion
+from denoising_diffusion_pytorch.models import Unet
+
 import torch
 import requests
-import random
-
+from random import randint
 
 
 def get_config():
@@ -28,7 +31,7 @@ def get_config():
         "timesteps": 1000,
         "pading": "reflect",
         "scaling": "std",
-        "batch_size" : 44,
+        "batch_size" : 32,
         "dropout": 0.,
         "optimization": {
             "epochs": 400,
@@ -70,8 +73,8 @@ def main():
     WORDS = response.content.splitlines()
     
     # Generate random indices
-    rn1 = random.randint(0, len(WORDS) - 1)
-    rn2 = random.randint(0, len(WORDS) - 1)
+    rn1 = randint(0, len(WORDS) - 1)
+    rn2 = randint(0, len(WORDS) - 1)
     
     # Decode the byte lines to strings
     w1 = WORDS[rn1].decode('utf-8')

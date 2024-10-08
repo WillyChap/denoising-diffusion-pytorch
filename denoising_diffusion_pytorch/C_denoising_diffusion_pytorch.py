@@ -8,7 +8,6 @@ import time
 import os
 import subprocess
 
-
 from collections import namedtuple
 from multiprocessing import cpu_count
 import glob
@@ -43,12 +42,30 @@ from accelerate import Accelerator
 from denoising_diffusion_pytorch.attend import Attend
 
 from denoising_diffusion_pytorch.version import __version__
+from multiprocessing import cpu_count
 
 # constants
 
 ModelPrediction =  namedtuple('ModelPrediction', ['pred_noise', 'pred_x_start'])
 
 # helpers functions
+
+# gaussian diffusion trainer class
+def get_num_cpus():
+    # Check if PBS_NODEFILE exists
+    if 'PBS_NODEFILE' in os.environ:
+        nodefile = os.getenv('PBS_NODEFILE')
+        try:
+            # Use subprocess to count the lines (which correspond to CPUs)
+            num_cpus = int(subprocess.check_output(['wc', '-l', nodefile]).split()[0])
+            return num_cpus
+        except Exception as e:
+            print(f"Error reading PBS_NODEFILE: {e}")
+            return None
+    else:
+        # Fallback to cpu_count if PBS_NODEFILE is not available
+        from multiprocessing import cpu_count
+        return cpu_count()
 
 def exists(x):
     return x is not None
@@ -103,7 +120,7 @@ def unnormalize_to_zero_to_one(t):
 def Upsample(dim, dim_out = None):
     return nn.Sequential(
         nn.Upsample(scale_factor = 2, mode = 'nearest'),
-        nn.Conv2d(dim, default(dim_out, dim), 3, padding = 1)
+        PeriodicConv2d(dim, default(dim_out, dim), kernel_size=3, padding=1)
     )
 
 def Downsample(dim, dim_out = None):
@@ -111,7 +128,6 @@ def Downsample(dim, dim_out = None):
         Rearrange('b c (h p1) (w p2) -> b (c p1 p2) h w', p1 = 2, p2 = 2),
         nn.Conv2d(dim * 4, default(dim_out, dim), 1)
     )
-
 
 
 class RMSNorm(Module):
@@ -285,6 +301,47 @@ class Attention(Module):
         out = rearrange(out, 'b h (x y) d -> b (h d) x y', x = h, y = w)
         return self.to_out(out)
 
+class PeriodicBoundaryConv(nn.Module):
+    def __init__(self, input_channels, init_dim, kernel_size=7, conditional_dimensions=0):
+        super(PeriodicBoundaryConv, self).__init__()
+        self.kernel_size = kernel_size
+        # Compute padding based on the kernel size (integer division for "same" padding)
+        self.padding = kernel_size // 2
+        
+        # Initialize Conv2d layer with the variable kernel size
+        self.init_conv = nn.Conv2d(input_channels + conditional_dimensions, init_dim, kernel_size, padding=0)  # Set padding=0 as we handle it manually
+
+    def forward(self, x):
+        # x shape is [batch, variable, latitude, longitude]
+
+        # 1. Circular padding for longitude (last dimension)
+        x = F.pad(x, (self.padding, self.padding, 0, 0), mode='circular')  # Pad last dimension (longitude) by self.padding
+        
+        # 2. Zero padding (or reflect padding) for latitude (second-to-last dimension)
+        x = F.pad(x, (0, 0, self.padding, self.padding), mode='reflect')  # Pad second-last dimension (latitude) by self.padding
+        
+        # 3. Apply convolution
+        x = self.init_conv(x)
+        
+        return x
+
+class PeriodicConv2d(nn.Module):
+    def __init__(self, dim_in, dim_out, kernel_size, padding=1):
+        super(PeriodicConv2d, self).__init__()
+        self.padding = padding
+        self.conv = nn.Conv2d(dim_in, dim_out, kernel_size, padding=0)  # Padding is handled manually
+
+    def forward(self, x):
+        # Apply circular padding (periodic boundary condition) on longitude
+        x = F.pad(x, (self.padding, self.padding, 0, 0), mode='circular')  # Apply padding to the last (longitude) dimension
+        
+        # Reflect padding or zero padding on latitude (2nd-to-last dimension)
+        x = F.pad(x, (0, 0, self.padding, self.padding), mode='reflect')  # Reflect padding for latitude
+
+        # Apply convolution
+        return self.conv(x)
+
+
 # model
 
 class Unet(Module):
@@ -319,7 +376,11 @@ class Unet(Module):
         input_channels = channels * (2 if self_condition else 1)
 
         init_dim = default(init_dim, dim)
-        self.init_conv = nn.Conv2d(input_channels + conditional_dimensions, init_dim, 7, padding = 3)
+
+        # Old code (deprecated usage of padding):
+        #self.init_conv = nn.Conv2d(input_channels + conditional_dimensions, init_dim, 7, padding = 3) #deprecated.
+        
+        self.init_conv = PeriodicBoundaryConv(input_channels, init_dim, kernel_size = 7, conditional_dimensions=conditional_dimensions)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -376,7 +437,7 @@ class Unet(Module):
                 resnet_block(dim_in, dim_in),
                 resnet_block(dim_in, dim_in),
                 attn_klass(dim_in, dim_head = layer_attn_dim_head, heads = layer_attn_heads),
-                Downsample(dim_in, dim_out) if not is_last else nn.Conv2d(dim_in, dim_out, 3, padding = 1)
+                Downsample(dim_in, dim_out) if not is_last else PeriodicConv2d(dim_in, dim_out, 3, padding=1)
             ]))
 
         mid_dim = dims[-1]
@@ -393,7 +454,7 @@ class Unet(Module):
                 resnet_block(dim_out + dim_in, dim_out),
                 resnet_block(dim_out + dim_in, dim_out),
                 attn_klass(dim_out, dim_head = layer_attn_dim_head, heads = layer_attn_heads),
-                Upsample(dim_out, dim_in) if not is_last else  nn.Conv2d(dim_out, dim_in, 3, padding = 1)
+                Upsample(dim_out, dim_in) if not is_last else PeriodicConv2d(dim_out, dim_in, 3, padding=1)
             ]))
 
         default_out_dim = channels * (1 if not learned_variance else 2)
@@ -453,23 +514,7 @@ class Unet(Module):
         x = self.final_res_block(x, t)
         return self.final_conv(x)
 
-# gaussian diffusion trainer class
-from multiprocessing import cpu_count
-def get_num_cpus():
-    # Check if PBS_NODEFILE exists
-    if 'PBS_NODEFILE' in os.environ:
-        nodefile = os.getenv('PBS_NODEFILE')
-        try:
-            # Use subprocess to count the lines (which correspond to CPUs)
-            num_cpus = int(subprocess.check_output(['wc', '-l', nodefile]).split()[0])
-            return num_cpus
-        except Exception as e:
-            print(f"Error reading PBS_NODEFILE: {e}")
-            return None
-    else:
-        # Fallback to cpu_count if PBS_NODEFILE is not available
-        from multiprocessing import cpu_count
-        return cpu_count()
+
 
 
 def extract(a, t, x_shape):
@@ -1114,10 +1159,10 @@ class Trainer_CESM:
         
 
         FPs = sorted(glob.glob(f'/{folder}/*.nc'))
-        with open('scaling_dict_CC.pkl', 'rb') as file:
+        with open('./scaling/scaling_dict_CC.pkl', 'rb') as file:
             loaded_mean_std_dict = pickle.load(file)
         
-        with open('scaling_dict_minmax_CC.pkl', 'rb') as file:
+        with open('./scaling/scaling_dict_minmax_CC.pkl', 'rb') as file:
             loaded_min_max_dict = pickle.load(file)
         
         self.ds = DataProcessed(FPs, config, loaded_mean_std_dict, loaded_min_max_dict)
