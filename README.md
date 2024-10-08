@@ -1,7 +1,7 @@
-<img src="./images/cesm-diffusion_02.png" width="500px"></img>
-
-## Conditional Denoising Diffusion Model for Climate Prediction, in Pytorch
-
+<div align="center">
+  <img src="./images/cesm-diffusion_02.png" width="500px"></img>
+  <h2>Conditional Denoising Diffusion Model for Climate Prediction, in Pytorch</h2>
+</div>
 This fork adapts the [Denoising Diffusion Probabilistic Model](https://arxiv.org/abs/2006.11239) for climate predictions using the CESM2 Large Ensemble (LENS) data. It predicts T2m, Precipitation, and Surface Pressure, conditioned on a given month and CO2 concentration (CO2vmr). This enables climate model forecasts with diffusion-based predictions, improving upon existing methodologies for ensemble predictions.
 
 ### Features
