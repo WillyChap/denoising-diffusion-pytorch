@@ -21,7 +21,7 @@ $ pip install .
 ## File Tree
 
 ```bash
-denoising_diffusion_pytorch/
+./denoising_diffusion_pytorch/
 ├── datasets/          # Contains data loading and preprocessing scripts
 ├── diffusion/         # Core diffusion model code and sampling logic
 ├── models/            # Defines the architecture (e.g., U-Net models)
