@@ -18,8 +18,23 @@ For more information about the CESM2 Large Ensemble, visit the [CESM2 LENS page]
 ```bash
 $ pip install .
 ```
+## File Tree
+
+```bash
+denoising_diffusion_pytorch/
+├── datasets/          # Contains data loading and preprocessing scripts
+├── diffusion/         # Core diffusion model code and sampling logic
+├── models/            # Defines the architecture (e.g., U-Net models)
+├── train/             # Training scripts, including multi-GPU support
+├── utils/             # Utility functions (logging, metrics, etc.)
+└── .github/           # GitHub-specific files (actions, issues templates)
+```
+
 
 ## Usage
+
+I have provided, launch scripts for PBS scheduling, and wandb implementation, but the user must input their own details. 
+
 
 ```python
 model = Unet(
