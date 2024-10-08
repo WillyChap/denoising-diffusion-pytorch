@@ -21,13 +21,22 @@ $ pip install .
 ## File Tree
 
 ```bash
+.Gen_Data.py                # Generate samples once trained
+.Train_CESM_Conditioned.py  # training control script
+.launch.sh                  # PBS launch code
+./notebooks/
+├── Developement.ipynb      # development code.
+├── Examining_Output.ipynb  # examining the output of model
+├── Gather_CESM_Data.ipynb  # retrieve and stage variables, provide scaling pkl files 
+./scaling/
+├── scaling_file.pkl        # pkl files for scaling
 ./denoising_diffusion_pytorch/
-├── datasets/          # Contains data loading and preprocessing scripts
-├── diffusion/         # Core diffusion model code and sampling logic
-├── models/            # Defines the architecture (e.g., U-Net models)
-├── train/             # Training scripts, including multi-GPU support
-├── utils/             # Utility functions (logging, metrics, etc.)
-└── .github/           # GitHub-specific files (actions, issues templates)
+├── datasets/               # Contains data loading and preprocessing scripts
+├── diffusion/              # Core diffusion model code and sampling logic
+├── models/                 # Defines the architecture (e.g., U-Net models)
+├── train/                  # Training scripts, including multi-GPU support
+├── utils/                  # Utility functions (logging, metrics, etc.)
+└── .github/                # GitHub-specific files (actions, issues templates)
 ```
 
 
