@@ -8,6 +8,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import SubsetRandomSampler
+
 
 from torchvision import utils
 
@@ -20,6 +22,52 @@ from denoising_diffusion_pytorch.datasets import DataProcessed
 from denoising_diffusion_pytorch.attend import Attend
 
 from denoising_diffusion_pytorch.version import __version__
+
+import os
+import glob
+import shutil
+import random
+
+def shuffle_and_copy(folder_path, shuffled_folder):
+    # Get all .nc files in the folder, sorted
+    file_paths = sorted(glob.glob(os.path.join(folder_path, '*.nc')))
+    
+    # Check if the shuffled folder exists
+    if not os.path.exists(shuffled_folder):
+        os.makedirs(shuffled_folder)
+
+        # Shuffle the file paths
+        shuffled_files = file_paths[:]
+        random.shuffle(shuffled_files)
+
+        # Copy the files with shuffled names
+        for i, file_path in enumerate(shuffled_files):
+            filename = os.path.basename(file_path)
+            new_filename = f"{i:04d}_{filename}"  # Prepend the index to filename
+            new_filepath = os.path.join(shuffled_folder, new_filename)
+            shutil.copyfile(file_path, new_filepath)
+
+        print(f"Copied and shuffled {len(file_paths)} files to {shuffled_folder}.")
+    else:
+        print(f"Shuffled folder '{shuffled_folder}' already exists. Re-shuffling files within the folder.")
+        
+        # If folder exists, get all the files there
+        shuffled_file_paths = sorted(glob.glob(os.path.join(shuffled_folder, '*.nc')))
+        
+        # Shuffle again in-place
+        random.shuffle(shuffled_file_paths)
+
+        for i, file_path in enumerate(shuffled_file_paths):
+            filename = os.path.basename(file_path)
+            new_filename = f"{i:04d}_{filename.split('_', 1)[-1]}"  # Keep original filename, but update index
+            new_filepath = os.path.join(shuffled_folder, new_filename)
+
+            # If new filename differs, rename the file
+            if file_path != new_filepath:
+                os.rename(file_path, new_filepath)
+
+        print(f"Re-shuffled files in {shuffled_folder}.")
+
 # trainer class
 class Trainer_CESM:
     def __init__(
@@ -39,7 +87,7 @@ class Trainer_CESM:
         ema_decay = 0.995,
         adam_betas = (0.9, 0.99),
         save_and_sample_every = 1000,
-        num_samples = 25,
+        num_samples = 36,
         results_folder = './results',
         amp = False,
         mixed_precision_type = 'fp16',
@@ -49,7 +97,9 @@ class Trainer_CESM:
         inception_block_idx = 2048,
         max_grad_norm = 1.,
         num_fid_samples = 50000,
-        save_best_and_latest_only = False
+        save_best_and_latest_only = False,
+        shuffle_files = False,
+        gen_specific_samples = False,
     ):
         super().__init__()
 
@@ -68,10 +118,12 @@ class Trainer_CESM:
             )
         
         # model
+        self.shuffle_files = shuffle_files
         self.run_name = run_name
         self.do_wandb = do_wandb
         self.model = diffusion_model
         self.channels = diffusion_model.channels
+        self.gen_specific_samples = gen_specific_samples
         is_ddim_sampling = diffusion_model.is_ddim_sampling
 
         # default convert_image_to depending on channels
@@ -98,21 +150,39 @@ class Trainer_CESM:
 
         
         self.config = config
+        self.folder = folder
         
+        if self.accelerator.is_main_process:
+            if shuffle_files:
+                print('...shuffling files...')
+                shuffle_and_copy(folder, f"{folder}_shuffled/")
+                print('...sleeping...')
+                time.sleep(5)
+                print('...done sleeping...')
+            else:
+                FPs = sorted(glob.glob(f'/{folder}/*.nc'))
 
-        FPs = sorted(glob.glob(f'/{folder}/*.nc'))
+        self.accelerator.wait_for_everyone()
+        if shuffle_files:
+            FPS = sorted(glob.glob(f'/{folder}/_shuffled/*.nc'))
+        else:
+            FPS = sorted(glob.glob(f'/{folder}/*.nc'))
+        
         with open('./scaling/scaling_dict_CC.pkl', 'rb') as file:
             loaded_mean_std_dict = pickle.load(file)
         
         with open('./scaling/scaling_dict_minmax_CC.pkl', 'rb') as file:
             loaded_min_max_dict = pickle.load(file)
-        
-        self.ds = DataProcessed(FPs, config, loaded_mean_std_dict, loaded_min_max_dict)
+
+
+        self.loaded_mean_std_dict = loaded_mean_std_dict
+        self.loaded_min_max_dict = loaded_min_max_dict
+        self.train_batch_size = train_batch_size
+        self.ds = DataProcessed(FPS, config, loaded_mean_std_dict, loaded_min_max_dict)
         
         assert len(self.ds) >= 100, 'you should have at least 100 images in your folder. at least 10k images recommended'
 
         print('cpu count:', cpu_count())
-
 
 
         # Check if PBS_NP is set, otherwise fallback to cpu_count()
@@ -120,8 +190,7 @@ class Trainer_CESM:
 
         num_cpus = get_num_cpus()
 
-        dl = DataLoader(self.ds, batch_size = train_batch_size, shuffle = False, pin_memory = True, num_workers = 64)
-
+        dl = DataLoader(self.ds, batch_size = train_batch_size,shuffle=False, pin_memory = True, num_workers = 64)
         dl = self.accelerator.prepare(dl)
         self.dl = cycle(dl)
 
@@ -295,41 +364,96 @@ class Trainer_CESM:
                     if self.step != 0 and divisible_by(self.step, self.save_and_sample_every):
                         self.ema.ema_model.eval()
 
-                        with torch.inference_mode():
-                            milestone = self.step // self.save_and_sample_every
-                            batches = num_to_groups(self.num_samples, self.batch_size)
-                            x_cond_rand = x_cond_rand.to(device)
-                            all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, x_cond = x_cond_rand[:n,:,:,:]), batches))
+                        #from here ... regen and save ....
 
-                        all_images = torch.cat(all_images_list, dim = 0)
-
-                        utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
-                        
-                        samples_fig=plt.figure(figsize=(18, 9))
-                        plt.suptitle("Samples after %d epochs" % self.step)
-                        for pp in range(20):
-                            plt.subplot(4, 5, 1 + pp)
-                            plt.axis('off')
-                            plt.imshow(all_images[pp,2,:,:].squeeze(0).data.cpu().numpy(),
-                                    cmap='RdBu', vmin=0, vmax=1)
-                            plt.colorbar()
-                        plt.tight_layout()
-
-                        if self.do_wandb:
-                            self.accelerator.log({"Samples":wandb.Image(samples_fig)})
-
-                        samples_fig=plt.figure(figsize=(18, 9))
-                        plt.suptitle("Conditions after %d epochs" % self.step)
-                        for pp in range(20):
-                            plt.subplot(4, 5, 1 + pp)
-                            plt.axis('off')
-                            plt.imshow(x_cond_rand[pp,0,:,:].squeeze().data.cpu().numpy(),
-                                    cmap='RdBu', vmin=0, vmax=1)
-                            plt.colorbar()
-                        plt.tight_layout()
-                        if self.do_wandb:
-                            self.accelerator.log({"Condition":wandb.Image(samples_fig)})
-                        plt.close()
+                        if self.gen_specific_samples:
+    
+                            x_cond_rand = x_cond_rand*0
+    
+                            mdo = 2
+                            mdot = (mdo - 1)/(12-1)
+    
+                            co2_ = 0.0004020489956418128
+                            co2_t = (co2_- 0.00039895)/(0.0008223-0.00039895)
+                            
+                            x_cond_rand[:,0,:,:] = mdot
+                            x_cond_rand[:,1,:,:] = co2_t
+                            
+                            with torch.inference_mode():
+                                
+                                milestone = self.step // self.save_and_sample_every
+                                batches = num_to_groups(self.num_samples, self.batch_size)
+                                print(f'!!!!!! batches is: {batches} !!!!!!!!')
+                                x_cond_rand = x_cond_rand.to(device)
+                                all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, x_cond = x_cond_rand[:n,:,:,:]), batches))
+    
+                            all_images = torch.cat(all_images_list, dim = 0)
+                            # Extract variables PS, PRECT, TREFHT
+                            PS = all_images[:, 0, :, :].squeeze(0).data.cpu().numpy()
+                            PRECT = all_images[:, 1, :, :].squeeze(0).data.cpu().numpy()
+                            TREFHT = all_images[:, 2, :, :].squeeze(0).data.cpu().numpy()
+                    
+                            num_samples_, height_, width_ = PS.shape  # Assume the same shape for all variables
+                    
+                            # Use an example dataset to load latitudes and longitudes
+                            print(f'folder looks like: {self.folder}')
+                            samp_ds = xr.open_dataset(glob.glob(f'{self.folder}/b.e21.BSSP370cmip6.*.nc')[0])
+                            latitudes = samp_ds['lat']
+                            longitudes = samp_ds['lon']
+                            samples_ = np.arange(num_samples_)
+                    
+                            # Create the xarray Dataset
+                            ds_ = xr.Dataset(
+                                {
+                                    'PS': (('samples', 'lat', 'lon'), PS),
+                                    'PRECT': (('samples', 'lat', 'lon'), PRECT),
+                                    'TREFHT': (('samples', 'lat', 'lon'), TREFHT)
+                                },
+                                coords={
+                                    'samples': samples_,
+                                    'lat': latitudes,
+                                    'lon': longitudes
+                                }
+                            )
+                            DS = self.ds._unapply_scaling(ds_)
+                            DS.to_netcdf(str(self.results_folder / f'{self.run_name}-{milestone}_month_{mdo:02}_co2_{co2_}.nc'))
+                        else:
+                            with torch.inference_mode():
+                                milestone = self.step // self.save_and_sample_every
+                                batches = num_to_groups(self.num_samples, self.batch_size)
+                                x_cond_rand = x_cond_rand.to(device)
+                                all_images_list = list(map(lambda n: self.ema.ema_model.sample(batch_size=n, x_cond = x_cond_rand[:n,:,:,:]), batches))
+    
+                            all_images = torch.cat(all_images_list, dim = 0)
+    
+                            utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                            
+                            samples_fig=plt.figure(figsize=(18, 9))
+                            plt.suptitle("Samples after %d epochs" % self.step)
+                            for pp in range(20):
+                                plt.subplot(4, 5, 1 + pp)
+                                plt.axis('off')
+                                plt.imshow(all_images[pp,2,:,:].squeeze(0).data.cpu().numpy(),
+                                        cmap='RdBu', vmin=0, vmax=1)
+                                plt.colorbar()
+                            plt.tight_layout()
+    
+                            if self.do_wandb:
+                                self.accelerator.log({"Samples":wandb.Image(samples_fig)})
+    
+                            samples_fig=plt.figure(figsize=(18, 9))
+                            plt.suptitle("Conditions after %d epochs" % self.step)
+                            for pp in range(20):
+                                plt.subplot(4, 5, 1 + pp)
+                                plt.axis('off')
+                                plt.imshow(x_cond_rand[pp,0,:,:].squeeze().data.cpu().numpy(),
+                                        cmap='RdBu', vmin=0, vmax=1)
+                                plt.colorbar()
+                            plt.tight_layout()
+                            if self.do_wandb:
+                                self.accelerator.log({"Condition":wandb.Image(samples_fig)})
+                            plt.close()
+                            
 
                         # whether to calculate fid
 
@@ -344,7 +468,9 @@ class Trainer_CESM:
                             self.save("latest")
                         else:
                             self.save(milestone, self.run_name)
-
+            
+                self.accelerator.wait_for_everyone()
                 pbar.update(1)
+                
 
         accelerator.print('training complete')

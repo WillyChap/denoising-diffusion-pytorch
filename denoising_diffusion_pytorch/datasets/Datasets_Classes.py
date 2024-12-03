@@ -124,7 +124,7 @@ class DataProcessed(Dataset):
             # Alternatively, you can expand the dimensions manually
             month_expanded = ds['time.month'].expand_dims({'lat': lat, 'lon': lon}, axis=(1, 2))
             month_expanded = month_expanded-1
-            month_corrected = month_expanded.where(month_expanded != 0, 12)
+            month_corrected = month_expanded.where(month_expanded != 0, 12) # check this line... 
             ds['month_expanded'] = month_corrected
     
             ds = self._apply_scaling(ds)

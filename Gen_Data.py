@@ -1,4 +1,7 @@
-from denoising_diffusion_pytorch.C_denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer_CESM, num_to_groups
+from denoising_diffusion_pytorch.train import Trainer_CESM
+from denoising_diffusion_pytorch.diffusion import GaussianDiffusion
+from denoising_diffusion_pytorch.models import Unet
+
 import torch
 import requests
 import random
@@ -17,6 +20,13 @@ import threading
 import torch.distributed as dist
 import multiprocessing
 import time
+import sys
+import argparse
+
+##global settings.
+do_run = 'governance_indexes'
+
+repeate_co2 = False
 
 
 def get_config():
@@ -24,7 +34,7 @@ def get_config():
         "input_channels": 1,
         "output_channels": 1,
         "context_image": True,
-        "context_channels": 1,
+        "context_channels": 2,
         "num_blocks": [2, 2],
         "hidden_channels": 64,
         "hidden_context_channels": 8,
@@ -42,7 +52,7 @@ def get_config():
         "timesteps": 1000,
         "pading": "reflect",
         "scaling": "std",
-        "batch_size" : 44,
+        "batch_size" : 128,
         "dropout": 0.,
         "optimization": {
             "epochs": 400,
@@ -52,6 +62,7 @@ def get_config():
         }
     }
     return config
+
 
 def destroy_process_group():
     if dist.is_initialized():
@@ -111,12 +122,38 @@ def save_file(filename, DS):
         print(f"Error saving file: {e}")
         return False
 
+class FileAlreadyBuiltError(Exception):
+    """Exception raised when the file has already been built."""
+    pass
+
 def main():
+    
     parser = argparse.ArgumentParser(description='Run CESM Diffusion Model')
     parser.add_argument('--month', type=int, default=1, help='Month to run the diffusion model on (1-12)')
+    parser.add_argument('--co2', type=float, default=0.000398996, help='co2vmr to run the diffusion model on (0.00039895 - 0.0008223)')
+    parser.add_argument('--run_num', type=float, default=0.000398996, help='run number to test')
     args = parser.parse_args()
+    run_num =  int(args.run_num)
+    # Validate month
+    if args.month < 1 or args.month > 12:
+        print(f"Error: Invalid month {args.month}. Should be between 1 and 12.")
+        sys.exit(1)
+    
+    # Validate co2
+    if args.co2 < 0.00039895 or args.co2 > 0.0008223:
+        print(f"Error: Invalid co2vmr {args.co2}. Should be between 0.00039895 and 0.0008223.")
+        sys.exit(1)
 
     month_do = args.month
+    co2 = args.co2
+    
+    fname = sorted(glob.glob(f'/glade/derecho/scratch/wchapman/Gen_CESM/samples_{do_run}_{run_num:03}_month{month_do:02}_co2{co2}*'))
+    if not repeate_co2 and len(fname) >= 1:
+        raise FileAlreadyBuiltError(f"File(s) already built for run {do_run}, month {month_do:02}, and co2 level {co2}. Exiting...")
+    else:
+        print('....start your engines....')
+
+    
     
     config = get_config()
     print('...starting up...')
@@ -125,13 +162,13 @@ def main():
     model = Unet(
         channels = 3,
         dim = config['hidden_channels'],
-        conditional_dimensions=1,
+        conditional_dimensions=config['context_channels'],
         dim_mults = config['dim_mults'],
         flash_attn = config['flash_attn'],
         dropout = config['dropout'],
         condition = True
     )
-
+    
     diffusion = GaussianDiffusion(
         model,
         image_size = (192, 288),
@@ -162,40 +199,71 @@ def main():
     print('model params:', sum(p.numel() for p in model.parameters() if p.requires_grad))
     trainer = Trainer_CESM(
         diffusion,
-        folder,
+        '/glade/derecho/scratch/wchapman/CESM_LE2_vars_BSSP370cmip6/',
         config,
         run_name,
         train_batch_size = config["batch_size"],
+        results_folder = './results_cc/',
         train_lr = 5e-5,
-        train_num_steps = 2,         # total training steps
+        train_num_steps = 700000,         # total training steps
         gradient_accumulate_every = 2,    # gradient accumulation steps
         ema_decay = 0.995,                # exponential moving average decay
         amp = True,                       # turn on mixed precision
         calculate_fid = False,           # whether to calculate fid during training
         max_grad_norm = 1.0,
-        save_and_sample_every = 10,
+        save_and_sample_every = 1000,
         do_wandb = False,
+        gen_specific_samples = False,
     )
 
-    do_run = 'yield_advantages'
-    trainer.load('32','yield_advantages')
+    
+    trainer.load(run_num,do_run)
 
     # User setting: total number of samples to generate
-    target_total_samples = 1000
+    target_total_samples = 500
     accumulated_samples = 0
     all_samples_list = []  # List to hold all samples
 
-    Monther = xr.open_dataset('/glade/derecho/scratch/wchapman/CESM_LE2_vars/CESM_LE2_climo/CESM_LE2_climo_all_months.nc')
-    replace_mats = (Monther.sel(time=month_do)['TREFHT'].values- 211.45393372)/(313.99099731-211.45393372)
+    ds = xr.open_dataset(f'{trainer.folder}/b.e21.BSSP370cmip6.f09_g17.LE2-1231.004.cam.h0.CO2_PRECT_TREFHT_PS.201501-202412.nc')
+
+   # Convert the scalar into a DataArray
+    month_do_array = xr.DataArray(month_do)
+
+    # Broadcast the scalar across the shape of PS (time, lat, lon)
+    month_broadcasted = month_do_array.broadcast_like(ds['PS'])[0,:,:].values
+
+    month_broadcasted = (month_broadcasted - 1)/(12-1)
+    
+    # Convert the scalar into a DataArray
+    co2_do_array = xr.DataArray(co2)
+
+    # Broadcast the scalar across the shape of PS (time, lat, lon)
+    co2_broadcasted = co2_do_array.broadcast_like(ds['PS'])[0,:,:].values
+    co2_broadcasted = (co2_broadcasted - 0.00039895)/(0.0008223-0.00039895)
 
     while accumulated_samples < target_total_samples:
         data, x_cond_rand = next(trainer.dl)
+        batch_size = x_cond_rand.shape[0]  
+        lat_dim = x_cond_rand.shape[2]     # This is 192
+        lon_dim = x_cond_rand.shape[3]     # This is 288
 
-        #set x_cond to desired month. 
-
-        x_cond_rand[:, :, :, :] = torch.tensor(replace_mats).to(trainer.device).unsqueeze(0).expand_as(x_cond_rand)
-
-        # x_cond_rand = x_cond.to(trainer.device)
+        # month_broadcasted should be expanded to 4D shape: (batch, 1, lat, lon)
+        month_broadcasted_tensor = torch.tensor(month_broadcasted).to(trainer.device)
+        
+        # Expand to match (batch_size, 1, lat, lon)
+        month_broadcasted_tensor = month_broadcasted_tensor.unsqueeze(0).unsqueeze(1).expand(batch_size, 1, lat_dim, lon_dim)
+        
+        # Now assign it to x_cond_rand[:, 0, :, :]
+        x_cond_rand[:, 0, :, :] = month_broadcasted_tensor.squeeze(1)
+        
+        # Similarly, handle CO2 broadcasting
+        co2_broadcasted_tensor = torch.tensor(co2_broadcasted).to(trainer.device)
+        
+        # Expand to match (batch_size, 1, lat, lon)
+        co2_broadcasted_tensor = co2_broadcasted_tensor.unsqueeze(0).unsqueeze(1).expand(batch_size, 1, lat_dim, lon_dim)
+        
+        # Assign it to x_cond_rand[:, 1, :, :]
+        x_cond_rand[:, 1, :, :] = co2_broadcasted_tensor.squeeze(1)
 
         # Get local batch size for this process
         local_batch_size = trainer.batch_size // trainer.accelerator.num_processes
@@ -255,7 +323,7 @@ def main():
         # DS.to_netcdf(f'samples_{do_run}_month{month_do:02}.nc')
         # print(f"Final dataset saved as samples_{do_run}_month{month_do:02}.nc")
 
-        saved_successfully = save_file(f'/glade/derecho/scratch/wchapman/Gen_CESM/samples_{do_run}_month{month_do:02}.nc', DS)
+        saved_successfully = save_file(f'/glade/derecho/scratch/wchapman/Gen_CESM/samples_{do_run}_{run_num:03}_month{month_do:02}_co2{co2}.nc', DS)
     # After saving the file
     if saved_successfully:
         print("File saved, now quitting forcefully.")
@@ -268,8 +336,6 @@ def main():
     cleanup_and_exit()
     # destroy_process_group()
     sys.exit(0)  #
-
-
 
 
 if __name__ == "__main__":

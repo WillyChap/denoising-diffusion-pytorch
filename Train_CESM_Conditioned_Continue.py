@@ -1,4 +1,7 @@
-from denoising_diffusion_pytorch.C_denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer_CESM
+from denoising_diffusion_pytorch.train import Trainer_CESM
+from denoising_diffusion_pytorch.diffusion import GaussianDiffusion
+from denoising_diffusion_pytorch.models import Unet
+
 import torch
 import requests
 import random
@@ -96,10 +99,12 @@ def main():
         amp = True,                       # turn on mixed precision
         calculate_fid = False,           # whether to calculate fid during training
         max_grad_norm = 1.0,
-        save_and_sample_every = 1000,
+        save_and_sample_every = 10,
         do_wandb = True,
+        shuffle_files=True,
+        gen_specific_samples = True,
     )
-    trainer.load('4','thumb_really')
+    trainer.load('39','orders_handles')
 
     trainer.train()
 

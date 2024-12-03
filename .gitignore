@@ -159,3 +159,8 @@ wandb/
 
 *.pt
 
+*01.sh
+*02.sh
+*03.sh
+*-Copy?.sh
+*sample-*.png

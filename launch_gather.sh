@@ -1,30 +1,61 @@
 #!/bin/bash
-#PBS -N QTTrainDiffusion
-#PBS -A P54048000
+#PBS -N GaDIFF_00
+#PBS -A P03010039
 #PBS -l walltime=12:00:00
-#PBS -o NEWt_TrainDiffusion.out
-#PBS -e NEWt_TrainDiffusion.out
-#PBS -q main
+#PBS -o DEC_Gather_00_TrainDiffusion.out
+#PBS -e DEC_Gather_00_TrainDiffusion.out
+#PBS -q casper
 #PBS -l select=1:ncpus=64:mem=470GB:ngpus=4 -l gpu_type=a100
 #PBS -m a
 #PBS -M wchapman@ucar.edu
 
-# qsub -I -q main -A P54048000 -l walltime=12:00:00 -l select=1:ncpus=32:mem=470GB:ngpus=4 -l gpu_type=a100
-# qsub -I -q casper -A P54048000 -l walltime=12:00:00 -l select=1:ncpus=32:mem=470GB:ngpus=1 -l gpu_type=a100
+# qsub -I -q main -A P54048000 -l walltime=01:00:00 -l select=1:ncpus=1:mem=12GB:ngpus=4 -l gpu_type=a100
+# qsub -I -q casper -A P03010039 -l walltime=01:00:00 -l select=1:ncpus=1:mem=30GB:ngpus=1 -l gpu_type=a100
 
 #accelerate config
 module load conda
 conda activate LuRain
 
-accelerate launch Gen_Data.py --month 1
-accelerate launch Gen_Data.py --month 2
-accelerate launch Gen_Data.py --month 3
-accelerate launch Gen_Data.py --month 4
-accelerate launch Gen_Data.py --month 5
-accelerate launch Gen_Data.py --month 6
-accelerate launch Gen_Data.py --month 7
-accelerate launch Gen_Data.py --month 8
-accelerate launch Gen_Data.py --month 9
-accelerate launch Gen_Data.py --month 10
-accelerate launch Gen_Data.py --month 11
-accelerate launch Gen_Data.py --month 12
+# Number of samples to pick
+SAMPLES=80
+MONTH=12
+
+# Set the threshold X value for CO2
+CO2_THRESHOLD=0.0003989547760583052
+
+# Path to the CSV file
+csv_file="./co2vmr_month.csv"
+
+# Extract and sort co2vmr values corresponding to the chosen month
+co2_values=$(awk -F, -v month="$MONTH" '$2 == month {print $1}' "$csv_file" | sort -n)
+
+# Convert the sorted co2_values to an array
+IFS=$'\n' read -rd '' -a co2_array <<<"$co2_values"
+
+# Number of co2vmr values available for the given month
+total_co2=${#co2_array[@]}
+
+# Print the total number of co2 values for the specified month
+echo "Total CO2 values for month $MONTH: $total_co2"
+
+# Check if there are enough values to sample
+if [ "$total_co2" -lt "$SAMPLES" ]; then
+  echo "Not enough CO2 values for month $MONTH. Available: $total_co2, Requested: $SAMPLES"
+  exit 1
+fi
+
+# Calculate the step size for even distribution
+step=$(echo "$total_co2 / $SAMPLES" | bc)
+
+# Loop through and select evenly spaced co2vmr values
+for ((i=0; i<SAMPLES; i++)); do
+  index=$(echo "$i * $step" | bc)
+  co2=${co2_array[$index]}
+  # Check if the CO2 value is below the threshold
+  if (( $(echo "$co2 > $CO2_THRESHOLD" | bc -l) )); then
+    printf "Skipping CO2 value: %s as it is below the threshold of %d\n" "$co2" "$CO2_THRESHOLD"
+    continue
+  fi
+  accelerate launch Gen_Data.py --month "$MONTH" --co2 "$co2" --run_num 3944
+  #python Gen_Data.py --month "$MONTH" --co2 "$co2"
+done
