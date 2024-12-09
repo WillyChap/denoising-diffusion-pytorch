@@ -1,4 +1,4 @@
-name: npl-2024b
+name: diff-analysis-2024b
 channels:
   - conda-forge
   - r
@@ -699,4 +699,3 @@ dependencies:
   - zlib-ng=2.2.1=he02047a_0
   - zstandard=0.23.0=py311h5cd10c7_0
   - zstd=1.5.6=ha6fb4c9_0
-prefix: /glade/u/apps/opt/conda/envs/npl-2024b
