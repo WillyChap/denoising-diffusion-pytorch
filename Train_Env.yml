@@ -483,4 +483,3 @@ dependencies:
       - torchsummary==1.5.1
       - vector-quantize-pytorch==1.14.24
       - xgboost==2.0.3
-prefix: /glade/work/wchapman/conda-envs/LuRain
