@@ -353,6 +353,20 @@ class GaussianDiffusion(Module):
 
         ret = img if not return_all_timesteps else torch.stack(imgs, dim = 1)
 
+
+        if return_all_timesteps:
+            print('not all timesteps have been returned, only every 10th')
+            timesteps = list(range(0, ret.shape[1], 10))  # Timesteps with step of 10
+        
+            # Include the last 10 timesteps explicitly
+            last_10_timesteps = list(range(max(ret.shape[1] - 10, 0), ret.shape[1]))
+            
+            # Merge the two lists, ensuring uniqueness and order
+            timesteps = sorted(set(timesteps + last_10_timesteps))
+            
+            # Slice the array with the selected timesteps
+            ret = ret[:, timesteps, :, :]
+
         ret = self.unnormalize(ret)
         return ret
 

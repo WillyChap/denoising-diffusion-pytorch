@@ -79,12 +79,12 @@ class DataProcessed(Dataset):
                     mini = -10
                 
                 # Reverse the min-max scaling
-                ds[vv][:,:,:] = ds[vv][:,:,:] * (maxi - mini) + mini
+                ds[vv] = ds[vv] * (maxi - mini) + mini
     
             # Reverse the standardization (z-score normalization) for 'PS', 'PRECT', and 'TREFHT'
-            ds['PS'][:,:,:] = ds['PS'][:,:,:] * self.loaded_mean_std_dict['PS_std'] + self.loaded_mean_std_dict['PS_mean']
-            ds['PRECT'][:,:,:] = ds['PRECT'][:,:,:] * self.loaded_mean_std_dict['PRECT_std'] + self.loaded_mean_std_dict['PRECT_mean']
-            ds['TREFHT'][:,:,:] = ds['TREFHT'][:,:,:] * self.loaded_mean_std_dict['TREFHT_std'] + self.loaded_mean_std_dict['TREFHT_mean']
+            ds['PS'] = ds['PS'] * self.loaded_mean_std_dict['PS_std'] + self.loaded_mean_std_dict['PS_mean']
+            ds['PRECT'] = ds['PRECT'] * self.loaded_mean_std_dict['PRECT_std'] + self.loaded_mean_std_dict['PRECT_mean']
+            ds['TREFHT'] = ds['TREFHT'] * self.loaded_mean_std_dict['TREFHT_std'] + self.loaded_mean_std_dict['TREFHT_mean']
     
         else:
             raise ValueError("Invalid scaling method specified.")
