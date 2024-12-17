@@ -8,8 +8,8 @@ setup(
   version = __version__,
   license='MIT',
   description = 'Denoising Diffusion Probabilistic Models - Pytorch',
-  author = 'Phil Wang',
-  author_email = 'lucidrains@gmail.com',
+  author = 'Phil Wang and Will Chapman',
+  author_email = 'lucidrains@gmail.com wchapman@ucar.edu',
   url = 'https://github.com/lucidrains/denoising-diffusion-pytorch',
   long_description_content_type = 'text/markdown',
   keywords = [
